@@ -1,0 +1,120 @@
+# OpenTelemetry Collector configuration for Windows DNS Client Monitoring with Filtering
+receivers:
+  asimdns:
+    # ETW session name
+    session_name: "DNSClientTrace"
+    # DNS Client Provider Configuration - Microsoft-Windows-DNS-Client
+    provider_guid: "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
+    # All keywords enabled
+    enable_flags: 0x8000000000000FFF
+    # TRACE_LEVEL_VERBOSE
+    enable_level: 5
+    
+    # -- Filtering Configuration --
+    
+    # Event type filtering
+    include_info_events: false   # Exclude all "Info" event types
+    excluded_event_ids: [1001, 1015, 1016, 1019]  # Specific event IDs to exclude
+    
+    # Domain filtering - exclude common operational queries
+    excluded_domains:
+      - "*.opinsights.azure.com"         # Azure monitoring
+      - "*.guestconfiguration.azure.com" # Azure guest config
+      - "*.internal.cloudapp.net"        # Azure internal
+      - "wpad.*"                         # Web proxy auto-discovery
+      - "_ldap._tcp.dc._msdcs.*"         # Active Directory
+      - "*.windows.com"                  # Windows services
+      - "*.microsoft.com"                # Microsoft services
+      - "*.msftncsi.com"                 # Network connectivity check
+      - "*.update.microsoft.com"         # Windows Update
+      - "*.windowsupdate.com"            # Windows Update
+    
+    # Query deduplication
+    enable_deduplication: true          # Enable deduplication of repeated queries
+    deduplication_window: 300           # Time window in seconds (5 minutes)
+    
+    # Query type filtering
+    exclude_aaaa_records: true          # Filter out IPv6 AAAA record queries
+    
+processors:
+  batch:
+    timeout: 100ms     # Reduced to minimize latency
+    send_batch_size: 100
+  
+  memory_limiter:
+    check_interval: 100ms
+    limit_mib: 100     # Reduced as we're doing real-time processing
+    spike_limit_mib: 20
+
+  resource:
+    attributes:
+      - key: service.name
+        value: "dns-client"
+        action: upsert
+      - key: service.namespace
+        value: "windows-monitoring"
+        action: upsert
+      - key: environment
+        value: "production"
+        action: upsert
+      - key: collector.name
+        value: "dns-event-collector"
+        action: upsert
+
+  attributes:
+    actions:
+      - key: source_type
+        value: "dns_client"
+        action: upsert
+      - key: source_provider
+        value: "Microsoft-Windows-DNS-Client"
+        action: upsert
+      - key: collection_mode
+        value: "etw_realtime"
+        action: upsert
+      - key: filtering_applied
+        value: "true"
+        action: upsert
+
+exporters:
+  kafka:
+    brokers: ["<Your Event Hub Namespace>.servicebus.windows.net:9093"]
+    protocol_version: "2.0.0"
+    topic: "asimdnsactivitylogs"
+    encoding: otlp_json
+    auth:
+      sasl:
+        mechanism: PLAIN
+        username: $$ConnectionString
+        password: Endpoint=sb://<Your Event Hub Namespace>.servicebus.windows.net/;SharedAccessKeyName=<Your Access Key Name>;SharedAccessKey=<Your Access Key>=;EntityPath=<Your Event Hub Name>
+      tls:
+        insecure: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 30s
+    metadata:
+      full: true
+      retry:
+        max: 3
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  zpages:
+    endpoint: "localhost:55679"
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    logs/dns_client:
+      receivers: [asimdns]
+      processors: [memory_limiter, batch, resource, attributes]
+      exporters: [kafka]
+
+  telemetry:
+    logs:
+      level: "info"  # Changed from debug to reduce log volume
+      development: true
+      encoding: "console"

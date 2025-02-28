@@ -1,0 +1,30 @@
+dist:
+    module: github.com/LaurieRhodes/asim-dns-collector
+    name: asim-dns-collector
+    description: ASIM DNS Event Collector for Microsoft Sentinel
+    version: 0.1.0
+    output_path: ./bin
+    otelcol_version: 0.89.0
+    go: 1.21
+    include_core: true
+    # Enable CGO for Windows builds to support golang-etw
+    env:
+        CGO_ENABLED: "1"
+
+receivers:
+    - gomod: github.com/LaurieRhodes/asim-dns-collector/internal/receiver/asimdns v0.1.0
+      path: ./internal/receiver/asimdns
+
+exporters:
+    - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/exporter/kafkaexporter v0.89.0
+    - gomod: go.opentelemetry.io/collector/exporter/loggingexporter v0.89.0
+
+processors:
+    - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.89.0
+    - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.89.0
+    - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.89.0
+    - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.89.0
+
+extensions:
+    - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.89.0
+    - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.89.0
