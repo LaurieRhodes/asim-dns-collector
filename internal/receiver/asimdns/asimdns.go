@@ -21,7 +21,7 @@ type Config struct {
 	// SessionName is the name of the ETW tracing session
 	SessionName string `mapstructure:"session_name"`
 
-	// ProviderGUID is the ETW provider GUID for DNS Client events
+	// ProviderGUID is the ETW provider GUID for DNS events
 	ProviderGUID string `mapstructure:"provider_guid"`
 
 	// EnableFlags are the ETW keyword flags for event filtering
@@ -45,6 +45,12 @@ type Config struct {
 	ExcludeAAAARecords bool `mapstructure:"exclude_aaaa_records"`
 }
 
+// Provider GUID constants
+const (
+	DNSClientProviderGUID = "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
+	DNSServerProviderGUID = "{EB79061A-A566-4698-9119-3ED2807060E7}"
+)
+
 // Validate checks the configuration and sets default values
 func (cfg *Config) Validate() error {
 	// Validate ProviderGUID
@@ -54,21 +60,46 @@ func (cfg *Config) Validate() error {
 
 	// Set default values if not provided
 	if cfg.SessionName == "" {
-		cfg.SessionName = "ASIMDNSTrace"
+		// Set session name based on provider type
+		if cfg.ProviderGUID == DNSServerProviderGUID {
+			cfg.SessionName = "ASIMDNSServerTrace"
+		} else {
+			cfg.SessionName = "ASIMDNSClientTrace"
+		}
 	}
 
+	// Set default EnableFlags based on provider type
 	if cfg.EnableFlags == 0 {
-		cfg.EnableFlags = 0x8000000000000FFF
+		if cfg.ProviderGUID == DNSServerProviderGUID {
+			// For DNS Server, enable flags for query-related events by default
+			// This includes query received, response success/failure, and recursion events
+			cfg.EnableFlags = 0x000000000000003F // Combined flags for query-related events
+		} else {
+			// For DNS Client, enable all events by default
+			cfg.EnableFlags = 0x8000000000000FFF // All DNS Client events
+		}
 	}
 
 	if cfg.EnableLevel == 0 {
-		cfg.EnableLevel = 5 // Verbose
+		if cfg.ProviderGUID == DNSServerProviderGUID {
+			cfg.EnableLevel = 4 // Information level for DNS Server
+		} else {
+			cfg.EnableLevel = 5 // Verbose for DNS Client
+		}
 	}
 
-	// Set filtering defaults
-	if !cfg.IncludeInfoEvents && len(cfg.ExcludedEventIDs) == 0 {
-		// Default excluded info events - low security value
-		cfg.ExcludedEventIDs = []uint16{1001, 1015, 1016, 1019}
+	// Set filtering defaults based on provider type
+	if cfg.ProviderGUID == DNSServerProviderGUID {
+		// For DNS Server, include info events by default
+		if !cfg.IncludeInfoEvents && len(cfg.ExcludedEventIDs) == 0 {
+			cfg.IncludeInfoEvents = true
+			cfg.ExcludedEventIDs = []uint16{} // No default exclusions
+		}
+	} else {
+		// For DNS Client, exclude info events by default
+		if !cfg.IncludeInfoEvents && len(cfg.ExcludedEventIDs) == 0 {
+			cfg.ExcludedEventIDs = []uint16{1001, 1015, 1016, 1019}
+		}
 	}
 
 	// Set default deduplication window if enabled but not configured
@@ -123,10 +154,10 @@ func NewFactory() receiver.Factory {
 // createDefaultConfig creates default configuration for the receiver
 func createDefaultConfig() component.Config {
 	return &Config{
-		SessionName:  "ASIMDNSTrace",
-		ProviderGUID: "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}",
-		EnableFlags:  0x8000000000000FFF,
-		EnableLevel:  5,
+		SessionName:  "ASIMDNSClientTrace", // Default to client trace
+		ProviderGUID: DNSClientProviderGUID, // Default to DNS Client provider
+		EnableFlags:  0x8000000000000FFF,    // All DNS Client events
+		EnableLevel:  5,                      // Verbose level
 		// Default filtering settings
 		IncludeInfoEvents:    false,
 		ExcludedEventIDs:     []uint16{1001, 1015, 1016, 1019},
@@ -168,9 +199,16 @@ func (r *DNSReceiver) Start(ctx context.Context, host component.Host) error {
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancelFunc = cancel
 
+	// Determine provider type for logging
+	providerType := "DNS Client"
+	if r.config.ProviderGUID == DNSServerProviderGUID {
+		providerType = "DNS Server"
+	}
+
 	// Simulate ETW session start - will be replaced with actual ETW implementation later
 	r.logger.Info("Starting ASIM DNS receiver (stub implementation)",
-		zap.String("provider", r.config.ProviderGUID),
+		zap.String("provider_type", providerType),
+		zap.String("provider_guid", r.config.ProviderGUID),
 		zap.Int("level", r.config.EnableLevel),
 		zap.Uint64("keywords", r.config.EnableFlags))
 
@@ -206,16 +244,33 @@ func (r *DNSReceiver) simulateEvents(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Simulate DNS query event
-			event := &EventRecord{
-				ProviderGUID: r.config.ProviderGUID,
-				EventID:      3006, // DNS Query event
-				Timestamp:    time.Now(),
-				ProcessID:    1234, // Placeholder
-				EventData: map[string]interface{}{
-					"QueryName": "example.com",
-					"QueryType": "1", // A record
-				},
+			// Create simulated event based on provider type
+			var event *EventRecord
+			
+			if r.config.ProviderGUID == DNSServerProviderGUID {
+				// Simulate DNS Server query event
+				event = &EventRecord{
+					ProviderGUID: r.config.ProviderGUID,
+					EventID:      256, // DNS Server Query event
+					Timestamp:    time.Now(),
+					ProcessID:    4, // DNS Server process
+					EventData: map[string]interface{}{
+						"QNAME": "example.com",
+						"QTYPE": "1", // A record
+					},
+				}
+			} else {
+				// Simulate DNS Client query event
+				event = &EventRecord{
+					ProviderGUID: r.config.ProviderGUID,
+					EventID:      3006, // DNS Client Query event
+					Timestamp:    time.Now(),
+					ProcessID:    1234, // Client process
+					EventData: map[string]interface{}{
+						"QueryName": "example.com",
+						"QueryType": "1", // A record
+					},
+				}
 			}
 			
 			logs := r.convertEventToLogs(event)
@@ -236,18 +291,34 @@ func (r *DNSReceiver) simulateEvents(ctx context.Context) {
 func (r *DNSReceiver) convertEventToLogs(event *EventRecord) plog.Logs {
 	logs := plog.NewLogs()
 	resourceLogs := logs.ResourceLogs().AppendEmpty()
-	resourceLogs.Resource().Attributes().PutStr("service.name", "windows_dns_client")
+	
+	// Set resource attributes based on provider type
+	serviceName := "windows_dns_client"
+	if event.ProviderGUID == DNSServerProviderGUID {
+		serviceName = "windows_dns_server"
+	}
+	
+	resourceLogs.Resource().Attributes().PutStr("service.name", serviceName)
+	resourceLogs.Resource().Attributes().PutStr("service.namespace", "asim_dns")
 	
 	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().SetName("dns.client.events")
+	scopeLogs.Scope().SetName("asim.dns.events")
 	
 	logRecord := scopeLogs.LogRecords().AppendEmpty()
 	
 	// Set timestamp
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(event.Timestamp))
 	
-	// Set basic event info
-	logRecord.Body().SetStr(fmt.Sprintf("DNS Event: %d", event.EventID))
+	// Set basic event info based on provider type
+	if event.ProviderGUID == DNSServerProviderGUID {
+		logRecord.Body().SetStr(fmt.Sprintf("DNS Server Event: %d", event.EventID))
+		logRecord.Attributes().PutStr("EventProduct", "DNS Server")
+	} else {
+		logRecord.Body().SetStr(fmt.Sprintf("DNS Client Event: %d", event.EventID))
+		logRecord.Attributes().PutStr("EventProduct", "DNS Client")
+	}
+	
+	logRecord.Attributes().PutStr("EventVendor", "Microsoft")
 	logRecord.Attributes().PutStr("provider.guid", event.ProviderGUID)
 	logRecord.Attributes().PutInt("event.id", int64(event.EventID))
 	logRecord.Attributes().PutInt("process.pid", int64(event.ProcessID))

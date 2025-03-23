@@ -1,0 +1,122 @@
+# OpenTelemetry Collector configuration for Windows DNS Server Monitoring
+receivers:
+  asimdns:
+    # ETW session name
+    session_name: "DNSServerTrace"
+    # DNS Server Provider Configuration - Microsoft-Windows-DNSServer
+    provider_guid: "{EB79061A-A566-4698-9119-3ED2807060E7}"
+    # Enable relevant keywords for DNS Server queries
+    # 0x0000000000000001: QUERY_RECEIVED
+    # 0x0000000000000002: RESPONSE_SUCCESS
+    # 0x0000000000000004: RESPONSE_FAILURE
+    # 0x0000000000000008: IGNORED_QUERY
+    # 0x0000000000000010: RECURSE_QUERY_OUT
+    # 0x0000000000000020: RECURSE_RESPONSE_IN
+    enable_flags: 0x000000000000003F  # Combined flags for query-related events
+    # Information level (4 is Informational, 5 is Verbose)
+    enable_level: 4
+    
+    # -- Filtering Configuration --
+    
+    # Event type filtering
+    include_info_events: true   # Include "Info" event types for DNS Server
+    excluded_event_ids: []      # No excluded event IDs by default
+    
+    # Domain filtering - exclude common operational queries
+    excluded_domains:
+      - "*.opinsights.azure.com"         # Azure monitoring
+      - "*.guestconfiguration.azure.com" # Azure guest config
+      - "*.internal.cloudapp.net"        # Azure internal
+      - "wpad.*"                         # Web proxy auto-discovery
+    
+    # Query deduplication
+    enable_deduplication: true          # Enable deduplication of repeated queries
+    deduplication_window: 300           # Time window in seconds (5 minutes)
+    
+    # Query type filtering
+    exclude_aaaa_records: false         # Keep IPv6 AAAA record queries for DNS Server
+    
+processors:
+  batch:
+    timeout: 100ms     
+    send_batch_size: 100
+  
+  memory_limiter:
+    check_interval: 100ms
+    limit_mib: 100     
+    spike_limit_mib: 20
+
+  resource:
+    attributes:
+      - key: service.name
+        value: "dns-server"
+        action: upsert
+      - key: service.namespace
+        value: "windows-monitoring"
+        action: upsert
+      - key: environment
+        value: "production"
+        action: upsert
+      - key: collector.name
+        value: "dns-event-collector"
+        action: upsert
+
+  attributes:
+    actions:
+      - key: source_type
+        value: "dns_server"
+        action: upsert
+      - key: source_provider
+        value: "Microsoft-Windows-DNSServer"
+        action: upsert
+      - key: collection_mode
+        value: "etw_realtime"
+        action: upsert
+
+exporters:
+  kafka:
+    brokers: ["ehns-ase-defender01-ayfsr.servicebus.windows.net:9093"]
+    protocol_version: "2.0.0"
+    topic: "asimdnsactivitylogs"
+    encoding: otlp_json
+    auth:
+      sasl:
+        mechanism: PLAIN
+        username: $$ConnectionString
+        password: Endpoint=sb://<Your Event Hub Namespace>.servicebus.windows.net/;SharedAccessKeyName=<Your Access Key Name>;SharedAccessKey=<Your Access Key>=;EntityPath=<Your Event Hub Name>
+      tls:
+        insecure: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 30s
+    metadata:
+      full: true
+      retry:
+        max: 3
+        
+  logging:
+    verbosity: detailed
+    sampling_initial: 1
+    sampling_thereafter: 1
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+  zpages:
+    endpoint: "localhost:55679"
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    logs/dns_server:
+      receivers: [asimdns]
+      processors: [memory_limiter, batch, resource, attributes]
+      exporters: [kafka, logging]
+
+  telemetry:
+    logs:
+      level: "debug"
+      development: true
+      encoding: "console"

@@ -203,6 +203,18 @@ func extractAdditionalFields(event *etw.Event) map[string]interface{} {
 		"SourcePort":    true,
 		"QueryOptions":  true,
 		"QueryDuration": true,
+		// DNS Server specific fields
+		"QNAME":         true,
+		"QTYPE":         true,
+		"RCODE":         true,
+		"Source":        true,
+		"Destination":   true,
+		"Port":          true,
+		"Zone":          true,
+		"TCP":           true,
+		"RD":            true,
+		"AA":            true,
+		"AD":            true,
 	}
 	
 	// Add any fields not already mapped to standard ASIM fields

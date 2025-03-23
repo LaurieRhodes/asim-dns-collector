@@ -99,7 +99,14 @@ func (r *DNSEtwReceiver) Start(ctx context.Context, host component.Host) error {
 		r.logger.Info("ETW consumer exited")
 	}()
 
+	// Log provider specific info
+	providerType := "DNS Client"
+	if r.config.ProviderGUID == DNSServerProviderGUID {
+		providerType = "DNS Server"
+	}
+
 	r.logger.Info("ASIM DNS ETW receiver started",
+		zap.String("provider_type", providerType),
 		zap.String("provider", r.config.ProviderGUID),
 		zap.Int("level", r.config.EnableLevel),
 		zap.Uint64("keywords", r.config.EnableFlags),
@@ -184,8 +191,14 @@ func (r *DNSEtwReceiver) convertEventToLogs(event *etw.Event) plog.Logs {
 	logs := plog.NewLogs()
 	resourceLogs := logs.ResourceLogs().AppendEmpty()
 	
+	// Set correct service name based on provider type
+	serviceName := "windows_dns_client"
+	if isDnsServerEvent(event) {
+		serviceName = "windows_dns_server"
+	}
+	
 	// Set resource attributes
-	resourceLogs.Resource().Attributes().PutStr("service.name", "windows_dns_client")
+	resourceLogs.Resource().Attributes().PutStr("service.name", serviceName)
 	resourceLogs.Resource().Attributes().PutStr("service.namespace", "asim_dns")
 	
 	// Create scope logs
@@ -195,68 +208,80 @@ func (r *DNSEtwReceiver) convertEventToLogs(event *etw.Event) plog.Logs {
 	// Create log record
 	logRecord := scopeLogs.LogRecords().AppendEmpty()
 	
-	// Set timestamp from ETW event
+	// Set both timestamps for proper processing
 	logRecord.SetTimestamp(pcommon.NewTimestampFromTime(event.System.TimeCreated.SystemTime))
+	logRecord.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Now()))
 	
-	// Determine ASIM event type and subtype
-	eventType, eventSubType := getAsimEventType(event.System.EventID)
-	
-	// Set body for context
-	logRecord.Body().SetStr(fmt.Sprintf("DNS Client Event: %s %s (ID: %d)", 
-		eventType, eventSubType, event.System.EventID))
-	
-	// Set common ASIM fields
-	logRecord.Attributes().PutStr("EventType", eventType)
-	logRecord.Attributes().PutStr("EventSubType", eventSubType)
-	logRecord.Attributes().PutInt("EventCount", 1)
-	logRecord.Attributes().PutStr("EventProduct", "DNS Client")
-	logRecord.Attributes().PutStr("EventVendor", "Microsoft")
-	logRecord.Attributes().PutStr("EventOriginalType", fmt.Sprintf("%d", event.System.EventID))
-	
-	// Set device information fields
-	setDeviceFields(logRecord)
-	
-	// Set DNS query fields
-	if queryName, ok := getEventDataString(event, "QueryName"); ok {
-		logRecord.Attributes().PutStr("DnsQuery", queryName)
-	}
-	
-	// Set DNS query type and name
-	if queryTypeStr, ok := getEventDataString(event, "QueryType"); ok {
-		if queryTypeInt, err := strconv.Atoi(queryTypeStr); err == nil {
-			logRecord.Attributes().PutInt("DnsQueryType", int64(queryTypeInt))
-			logRecord.Attributes().PutStr("DnsQueryTypeName", getDnsQueryTypeName(queryTypeInt))
-		}
-	}
-	
-	// Set network fields
-	setNetworkFields(event, logRecord)
-	
-	// Add DNS flags if available
-	if queryOptions, ok := getEventDataString(event, "QueryOptions"); ok {
-		if optionsInt, err := strconv.ParseUint(queryOptions, 10, 64); err == nil {
-			setDnsFlags(optionsInt, logRecord)
-		}
-	}
-	
-	// Set DNS session ID
-	sessionID := fmt.Sprintf("%d-%d-%d", 
-		event.System.Execution.ProcessID, 
-		event.System.EventID, 
-		event.System.TimeCreated.SystemTime.UnixNano())
-	logRecord.Attributes().PutStr("DnsSessionId", sessionID)
-	
-	// Handle event result based on event type
-	if eventType == "Query" && eventSubType == "response" {
-		setResponseFields(event, logRecord)
+	// Process based on provider type
+	if isDnsServerEvent(event) {
+		// Handle DNS Server events
+		handleDnsServerEvent(event, logRecord)
+		
+		// Set body for context using DNS Server specific naming
+		eventType, eventSubType := getAsimDnsServerEventType(event.System.EventID)
+		logRecord.Body().SetStr(fmt.Sprintf("DNS Server Event: %s %s (ID: %d)", 
+			eventType, eventSubType, event.System.EventID))
 	} else {
-		// For non-response events (requests, cache operations)
-		logRecord.Attributes().PutStr("EventResult", "NA")
-		logRecord.Attributes().PutStr("EventResultDetails", "NA")
+		// Handle DNS Client events using existing code
+		eventType, eventSubType := getAsimEventType(event.System.EventID)
+		
+		// Set body for context
+		logRecord.Body().SetStr(fmt.Sprintf("DNS Client Event: %s %s (ID: %d)", 
+			eventType, eventSubType, event.System.EventID))
+		
+		// Set common ASIM fields
+		logRecord.Attributes().PutStr("EventType", eventType)
+		logRecord.Attributes().PutStr("EventSubType", eventSubType)
+		logRecord.Attributes().PutInt("EventCount", 1)
+		logRecord.Attributes().PutStr("EventProduct", "DNS Client")
+		logRecord.Attributes().PutStr("EventVendor", "Microsoft")
+		logRecord.Attributes().PutStr("EventOriginalType", fmt.Sprintf("%d", event.System.EventID))
+		
+		// Set device information fields
+		setDeviceFields(logRecord)
+		
+		// Set DNS query fields
+		if queryName, ok := getEventDataString(event, "QueryName"); ok {
+			logRecord.Attributes().PutStr("DnsQuery", queryName)
+		}
+		
+		// Set DNS query type and name
+		if queryTypeStr, ok := getEventDataString(event, "QueryType"); ok {
+			if queryTypeInt, err := strconv.Atoi(queryTypeStr); err == nil {
+				logRecord.Attributes().PutInt("DnsQueryType", int64(queryTypeInt))
+				logRecord.Attributes().PutStr("DnsQueryTypeName", getDnsQueryTypeName(queryTypeInt))
+			}
+		}
+		
+		// Set network fields
+		setNetworkFields(event, logRecord)
+		
+		// Add DNS flags if available
+		if queryOptions, ok := getEventDataString(event, "QueryOptions"); ok {
+			if optionsInt, err := strconv.ParseUint(queryOptions, 10, 64); err == nil {
+				setDnsFlags(optionsInt, logRecord)
+			}
+		}
+		
+		// Set DNS session ID
+		sessionID := fmt.Sprintf("%d-%d-%d", 
+			event.System.Execution.ProcessID, 
+			event.System.EventID, 
+			event.System.TimeCreated.SystemTime.UnixNano())
+		logRecord.Attributes().PutStr("DnsSessionId", sessionID)
+		
+		// Handle event result based on event type
+		if eventType == "Query" && eventSubType == "response" {
+			setResponseFields(event, logRecord)
+		} else {
+			// For non-response events (requests, cache operations)
+			logRecord.Attributes().PutStr("EventResult", "NA")
+			logRecord.Attributes().PutStr("EventResultDetails", "NA")
+		}
+		
+		// Add any remaining fields as additional fields
+		setAdditionalFields(event, logRecord)
 	}
-	
-	// Add any remaining fields as additional fields
-	setAdditionalFields(event, logRecord)
 	
 	// Log the transformation for debugging - safely check for DnsQuery
 	dnsQuery := "not_set"
@@ -267,8 +292,8 @@ func (r *DNSEtwReceiver) convertEventToLogs(event *etw.Event) plog.Logs {
 	// Debug log occasionally for processed events
 	if r.filterManager.GetTotalEvents() % 100 == 0 {
 		r.logger.Debug("Applied ASIM transformation", 
-			zap.String("EventType", eventType),
-			zap.String("EventSubType", eventSubType),
+			zap.String("Provider", r.config.ProviderGUID),
+			zap.String("EventID", fmt.Sprintf("%d", event.System.EventID)),
 			zap.String("DnsQuery", dnsQuery))
 	}
 	
@@ -281,6 +306,12 @@ func newDNSEtwReceiver(
 	cfg *Config,
 	consumer consumer.Logs,
 ) (receiver.Logs, error) {
+	// Determine which getAsimEventType function to use based on provider
+	getEventTypeFunc := getAsimEventType
+	if cfg.ProviderGUID == DNSServerProviderGUID {
+		getEventTypeFunc = getAsimDnsServerEventType
+	}
+	
 	// Create the filter manager
 	filterManager := filtering.NewFilterManager(
 		settings.Logger,
@@ -291,7 +322,7 @@ func newDNSEtwReceiver(
 		cfg.EnableDeduplication,
 		cfg.DeduplicationWindow,
 		getEventDataString,
-		getAsimEventType,
+		getEventTypeFunc,
 	)
 	
 	r := &DNSEtwReceiver{
@@ -301,7 +332,15 @@ func newDNSEtwReceiver(
 		filterManager: filterManager,
 	}
 	
-	settings.Logger.Info("DNS receiver configured with filtering",
+	// Determine provider type for logging
+	providerType := "DNS Client"
+	if cfg.ProviderGUID == DNSServerProviderGUID {
+		providerType = "DNS Server"
+	}
+	
+	settings.Logger.Info("DNS receiver configured",
+		zap.String("provider_type", providerType),
+		zap.String("provider_guid", cfg.ProviderGUID),
 		zap.Bool("include_info_events", cfg.IncludeInfoEvents),
 		zap.Int("excluded_event_ids_count", len(cfg.ExcludedEventIDs)),
 		zap.Int("excluded_domains_count", len(cfg.ExcludedDomains)),
