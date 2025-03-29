@@ -3,7 +3,7 @@
 ## Overview
 
 This directory contains the implementation of the ASIM DNS Collector, which:
-1. Captures Windows DNS Client events via ETW (Event Tracing for Windows)
+1. Captures Windows DNS Server events via ETW (Event Tracing for Windows)
 2. Transforms events into Microsoft Sentinel ASIM DNS Activity Logs schema
 3. Applies filtering to improve signal-to-noise ratio
 4. Exports the transformed and filtered data to Azure Event Hubs
@@ -18,38 +18,51 @@ The implementation has been refactored into a modular structure for better maint
 - `asimdns_windows.go`: Windows-specific implementation using ETW
 - `helpers.go`: General helper functions (device info, IP address, Windows version)
 - `dns_helpers.go`: DNS-specific helper functions (query types, response codes, flags)
+- `dns_server_helpers.go`: DNS Server-specific helper functions for handling server events
 
 ## Filtering Implementation
 
 The filtering implementation is modular and extensible:
 
-1. **Event Type Filtering**: Excludes specific event types with low security value (EventIDs 1001, 1015, 1016, 1019)
+1. **Event Type Filtering**: Configurable event type filtering with support for both DNS Server and Client events
 2. **Domain Pattern Filtering**: Filters out routine operational domains using pattern matching
 3. **Query Deduplication**: Eliminates repetitive identical queries within a configurable time window
 4. **Query Type Filtering**: Optional filtering of AAAA (IPv6) records to reduce duplication
 
 ## Configuration Options
 
-The collector supports extensive configuration options:
+The collector supports extensive configuration options. For DNS Server configuration:
 
 ```yaml
 receivers:
   asimdns:
     # Standard configuration
-    session_name: "DNSClientTrace"
-    provider_guid: "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
-    enable_flags: 0x8000000000000FFF
-    enable_level: 5
+    session_name: "DNSServerTrace"
+    provider_guid: "{EB79061A-A566-4698-9119-3ED2807060E7}"
+    enable_flags: 0x000000000000003F
+    enable_level: 4
     
     # Filtering options
-    include_info_events: false
-    excluded_event_ids: [1001, 1015, 1016, 1019]
+    include_info_events: true
+    excluded_event_ids: []
     excluded_domains:
       - "*.opinsights.azure.com"
       - "*.internal.cloudapp.net"
     enable_deduplication: true
     deduplication_window: 300
-    exclude_aaaa_records: true
+    exclude_aaaa_records: false
+```
+
+The collector also maintains backwards compatibility with DNS Client events, though the primary focus is now on DNS Server events:
+
+```yaml
+receivers:
+  asimdns:
+    # Standard configuration for DNS Client
+    session_name: "DNSClientTrace"
+    provider_guid: "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
+    enable_flags: 0x8000000000000FFF
+    enable_level: 5
 ```
 
 ## Debugging

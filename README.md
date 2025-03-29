@@ -2,13 +2,14 @@
 
 ## Project Overview
 
-A custom OpenTelemetry Collector receiver for capturing and transforming Windows DNS Client events into Microsoft Sentinel ASIM (Advanced Security Information Model) schema. The collector successfully captures DNS events via ETW and exports them to Azure Event Hubs using the Kafka protocol.
+A custom OpenTelemetry Collector receiver for capturing and transforming Windows DNS Server and Client events into Microsoft Sentinel ASIM (Advanced Security Information Model) schema. The collector successfully captures DNS events via ETW and exports them to Azure Event Hubs using the Kafka protocol.
 
 ### Key Features
 
 - Pure Go implementation with no CGO dependencies
-- Windows DNS Client event capture using ETW
+- Windows DNS Server and Client event capture using ETW
 - Real-time event processing and transformation
+- Comprehensive filtering capabilities to improve signal-to-noise ratio
 - OpenTelemetry Collector integration
 - Kafka exporter for Microsoft Sentinel integration via Azure Event Hubs
 
@@ -17,8 +18,43 @@ A custom OpenTelemetry Collector receiver for capturing and transforming Windows
 - ✅ ETW event capture is fully functional
 - ✅ OpenTelemetry Collector receiver implementation is complete
 - ✅ Successful export to Azure Event Hubs using Kafka protocol
-- 🔄 ASIM schema transformation in progress
-- 🔄 Field mapping from ETW events to ASIM DNS Activity Logs schema
+- ✅ ASIM schema transformation for DNS Server and Client events
+- ✅ Configurable filtering for high-volume environments
+- ✅ Field mapping from ETW events to ASIM DNS Activity Logs schema
+
+## Quick Start Guide
+
+### Installation
+
+1. Download the latest release from the releases page
+2. Create a directory for the collector (e.g., `C:\Program Files\ASIMDNSCollector`)
+3. Extract the release package to this directory
+4. Configure your Event Hub details in the configuration file
+
+### Running as Administrator
+
+The collector must be run with administrative privileges to access ETW:
+
+```powershell
+# Open PowerShell as Administrator
+cd "C:\Program Files\ASIMDNSCollector"
+.\asim-dns-collector.exe --config=.\configs\dns_server_config.yaml
+```
+
+### Installing as a Windows Service
+
+For production environments, install as a Windows service:
+
+```powershell
+# Install service (run as Administrator)
+sc create ASIMDNSCollector binPath= "\"C:\Program Files\ASIMDNSCollector\asim-dns-collector.exe\" --config=\"C:\Program Files\ASIMDNSCollector\configs\dns_server_config.yaml\"" start= auto
+sc description ASIMDNSCollector "ASIM DNS Collector Service for Microsoft Sentinel"
+
+# Start the service
+sc start ASIMDNSCollector
+```
+
+For detailed installation instructions, see [INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md).
 
 ## Architecture
 
@@ -30,28 +66,26 @@ A custom OpenTelemetry Collector receiver for capturing and transforming Windows
 
 ## ASIM DNS Schema Integration
 
-The collector transforms Windows DNS Client ETW events into the Microsoft Sentinel ASIM DNS Activity Logs schema. This standardized schema enables consistent analytics and threat detection across different DNS data sources.
+The collector transforms Windows DNS Server and Client ETW events into the Microsoft Sentinel ASIM DNS Activity Logs schema. This standardized schema enables consistent analytics and threat detection across different DNS data sources.
 
 ### Key ASIM DNS Fields Mapping
 
-| ASIM Field        | Description                       | ETW Source Field       |
-| ----------------- | --------------------------------- | ---------------------- |
-| TimeGenerated     | Time of the event                 | Event timestamp        |
-| EventType         | Type of event (Query, Response)   | Based on EventID       |
-| EventSubType      | Subtype (request, response)       | Based on EventID       |
-| EventResult       | Result of the operation           | Based on response code |
-| DnsQuery          | The DNS query                     | dns.QueryName          |
-| DnsQueryType      | Type of DNS query (A, AAAA, etc.) | dns.QueryType          |
-| SrcIpAddr         | Source IP address                 | Based on context       |
-| SrcPortNumber     | Source port                       | Based on context       |
-| DstIpAddr         | Destination IP address            | Based on context       |
-| EventOriginalType | Original event ID                 | event.id               |
-| EventProduct      | Product generating the event      | "DNS Client"           |
-| EventVendor       | Vendor of the product             | "Microsoft"            |
+| ASIM Field        | Description                       | DNS Server Source | DNS Client Source |
+| ----------------- | --------------------------------- | ----------------- | ----------------- |
+| TimeGenerated     | Time of the event                 | Event timestamp   | Event timestamp   |
+| EventType         | Type of event (Query, Response)   | Based on EventID  | Based on EventID  |
+| EventSubType      | Subtype (request, response)       | Based on EventID  | Based on EventID  |
+| EventResult       | Result of the operation           | Based on RCODE    | Based on Status   |
+| DnsQuery          | The DNS query                     | QNAME             | QueryName         |
+| DnsQueryType      | Type of DNS query (A, AAAA, etc.) | QTYPE             | QueryType         |
+| SrcIpAddr         | Source IP address                 | CLIENT_IP         | Local IP          |
+| SrcPortNumber     | Source port                       | Port              | SourcePort        |
+| DstIpAddr         | Destination IP address            | Server IP         | ServerList        |
+| EventOriginalType | Original event ID                 | event.id          | event.id          |
+| EventProduct      | Product generating the event      | "DNS Server"      | "DNS Client"      |
+| EventVendor       | Vendor of the product             | "Microsoft"       | "Microsoft"       |
 
-### ASIM Schema Reference
-
-The full ASIM DNS Activity Logs schema includes numerous fields for comprehensive DNS event representation, including query details, network information, threat intelligence, and more.
+For more details on the schema mapping, see [ASIM_SCHEMA_MAPPING.md](docs/ASIM_SCHEMA_MAPPING.md).
 
 ## Project Structure
 
@@ -60,52 +94,38 @@ The full ASIM DNS Activity Logs schema includes numerous fields for comprehensiv
 - `configs/`: Configuration templates
 - `docs/`: Project documentation
 
-## Getting Started
+## Configuration
 
-### Prerequisites
+Choose the appropriate configuration file based on your needs:
 
-- Go 1.21+
-- OpenTelemetry Collector Builder
-- Windows environment (for DNS event capture)
-- Azure Event Hubs namespace (for Kafka protocol export)
+- `dns_server_config.yaml`: Collect events from the DNS Server
+- `config.yaml`: Collect events from DNS Client
+- `config_with_filtering.yaml`: DNS Client with comprehensive filtering
+- `dns_server_debug_config.yaml` and `debug_config.yaml`: Debug configurations
 
-### Installation
-
-1. Clone the repository
-2. Install OpenTelemetry Collector Builder
-3. Build the collector
-   
-   ```bash
-   go install go.opentelemetry.io/collector/cmd/builder@v0.89.0
-   builder --config builder-config.yaml
-   ```
-
-### Configuration
-
-Customize `configs/config.yaml` to configure:
-
-- ETW provider settings
-- Event filtering
-- Export destinations
-
-Example configuration for Azure Event Hubs integration:
+Example configuration for DNS Server with Azure Event Hubs integration:
 
 ```yaml
 receivers:
   asimdns:
-    session_name: "DNSClientTrace"
-    provider_guid: "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
-    enable_flags: 0x8000000000000FFF
-    enable_level: 5
-    buffer_size: 64
-    min_buffers: 64
-    max_buffers: 128
+    session_name: "DNSServerTrace"
+    provider_guid: "{EB79061A-A566-4698-9119-3ED2807060E7}"
+    enable_flags: 0x000000000000003F
+    enable_level: 4
+
+    # Filtering options
+    include_info_events: true
+    excluded_domains:
+      - "*.opinsights.azure.com"
+      - "*.internal.cloudapp.net"
+    enable_deduplication: true
+    deduplication_window: 300
 
 exporters:
   kafka:
     brokers: ["your-eventhub-namespace.servicebus.windows.net:9093"]
     protocol_version: "2.0.0"
-    topic: "youreventhubname"
+    topic: "asimdnsactivitylogs"
     encoding: otlp_json
     auth:
       sasl:
@@ -118,20 +138,29 @@ exporters:
 
 ## DNS Event Types
 
-The collector captures various Windows DNS Client events, including:
+The collector captures various Windows DNS events, including:
+
+### DNS Server Events
+
+- **256, 257**: DNS query received
+- **258, 259**: DNS response events
+- **260, 261**: DNS recursion events
+
+### DNS Client Events
 
 - **3006**: DNS query sent
 - **3008**: DNS query response received
 - **3020**: DNS cache entry added
 - **3019**: DNS cache entry removed
 
-## Next Steps
+## Documentation
 
-1. Complete ASIM schema transformation layer
-2. Implement comprehensive field mapping
-3. Add validation and error handling for ASIM schema compliance
-4. Develop unit and integration tests for transformation logic
-5. Optimize performance for high-volume event processing
+- [INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md): Detailed installation instructions
+- [DNS_SERVER_CONFIGURATION.md](docs/DNS_SERVER_CONFIGURATION.md): DNS Server specific configuration
+- [FILTERING_USAGE.md](docs/FILTERING_USAGE.md): Guide to optimizing event filtering
+- [ASIM_SCHEMA_MAPPING.md](docs/ASIM_SCHEMA_MAPPING.md): Details on ASIM schema mapping
+- [ETW_INTEGRATION.md](docs/ETW_INTEGRATION.md): Technical details on ETW integration
+- [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): Help with common issues
 
 ## Technical Implementation
 
@@ -142,9 +171,19 @@ The ASIM DNS Collector uses:
 - Producer-consumer model for event handling
 - Azure Event Hubs with Kafka protocol for Sentinel integration
 
-## Contributing
+## Building from Source
 
-Please read the documentation for details on our code of conduct and the process for submitting pull requests.
+If you need to build from source:
+
+```bash
+# Install OpenTelemetry Collector Builder
+go install go.opentelemetry.io/collector/cmd/builder@v0.89.0
+
+# Build the collector
+builder --config builder-config.yaml
+```
+
+
 
 ## License
 

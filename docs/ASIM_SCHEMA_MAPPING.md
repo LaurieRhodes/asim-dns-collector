@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides detailed guidance for transforming Windows DNS Client ETW events into the Microsoft Sentinel ASIM DNS Activity Logs schema. The ASIM (Advanced Security Information Model) provides a normalized schema across different data sources, enabling consistent analytics and threat detection.
+This document provides detailed guidance for transforming Windows DNS Server ETW events into the Microsoft Sentinel ASIM DNS Activity Logs schema. The ASIM (Advanced Security Information Model) provides a normalized schema across different data sources, enabling consistent analytics and threat detection.
 
 ## ASIM DNS Activity Logs Schema
 
@@ -150,26 +150,26 @@ The ASIM DNS Activity Logs schema is a comprehensive schema for representing DNS
 )
 ```
 
-## Windows DNS Client ETW Events to ASIM Mapping
+## Windows DNS Server ETW Events to ASIM Mapping
 
-The mapping from Windows DNS Client ETW events to ASIM DNS Activity Logs requires identifying event types, extracting relevant fields, and transforming them into the ASIM schema.
+The mapping from Windows DNS Server ETW events to ASIM DNS Activity Logs requires identifying event types, extracting relevant fields, and transforming them into the ASIM schema.
 
 ### Key Event Types
 
-1. **Query Events (Event ID 3006)**
-   - Represents DNS queries being sent
+1. **Query Received Events (Event ID 256, 257)**
+   - Represents DNS queries being received by the server
    - Event type: "Query"
    - Event subtype: "request"
 
-2. **Response Events (Event ID 3008)**
-   - Represents DNS responses received
+2. **Response Events (Event ID 258, 259)**
+   - Represents DNS responses sent by the server
    - Event type: "Query"
    - Event subtype: "response"
 
-3. **Cache Events (Event IDs 3019, 3020)**
-   - Represents DNS cache operations
-   - Event type: "DnsCache"
-   - Event subtype based on operation (add/remove)
+3. **Recursion Events (Event ID 260, 261)**
+   - Represents DNS recursion operations
+   - Event type: "Query"
+   - Event subtype: "recursive"
 
 ### Core Field Mapping
 
@@ -177,118 +177,143 @@ The mapping from Windows DNS Client ETW events to ASIM DNS Activity Logs require
 |------------|-----------|------------|----------------------|
 | TimeGenerated | datetime | event timestamp | Direct mapping |
 | EventCount | int | N/A | Default to 1 |
-| EventType | string | event.id | "Query" for 3006/3008, "DnsCache" for 3019/3020 |
-| EventSubType | string | event.id | "request" for 3006, "response" for 3008 |
-| EventResult | string | dns.Status | "Success" for successful responses, "Failure" otherwise |
-| EventResultDetails | string | dns.Status | Map DNS status codes to names |
+| EventType | string | event.id | "Query" for 256/257/258/259, "Query" for 260/261 |
+| EventSubType | string | event.id | "request" for 256/257, "response" for 258/259, "recursive" for 260/261 |
+| EventResult | string | dns.RCODE | "Success" for successful responses (RCODE=0), "Failure" otherwise |
+| EventResultDetails | string | dns.RCODE | Map DNS response codes to names |
 | EventOriginalType | string | event.id | Direct mapping |
-| EventProduct | string | N/A | "DNS Client" |
+| EventProduct | string | N/A | "DNS Server" |
 | EventVendor | string | N/A | "Microsoft" |
 | DvcIpAddr | string | Context | Local IP (may need OS API) |
 | DvcHostname | string | Context | Local hostname (may need OS API) |
 | DvcDomainType | string | Context | "FQDN" |
 | DvcOs | string | Context | "Windows" |
-| SrcIpAddr | string | Context | Local IP for queries, DNS server IP for responses |
-| SrcPortNumber | int | dns context | Local port for queries |
-| DstIpAddr | string | dns.ServerList | DNS server IP |
-| DnsQuery | string | dns.QueryName | Direct mapping |
-| DnsQueryType | int | dns.QueryType | Direct mapping (e.g., 1 for A, 28 for AAAA) |
-| DnsQueryTypeName | string | dns.QueryType | Map type codes (1="A", 28="AAAA", etc.) |
+| SrcIpAddr | string | dns.CLIENT_IP / dns.Source | Client IP address |
+| SrcPortNumber | int | dns.Port | Client port |
+| DstIpAddr | string | dns.SERVER_IP / dns.Destination | Server IP |
+| DnsQuery | string | dns.QNAME | Direct mapping |
+| DnsQueryType | int | dns.QTYPE | Direct mapping (e.g., 1 for A, 28 for AAAA) |
+| DnsQueryTypeName | string | dns.QTYPE | Map type codes (1="A", 28="AAAA", etc.) |
+| DnsResponseCode | int | dns.RCODE | Direct mapping |
+| DnsResponseName | string | dns.RCODE | Map response codes (0="NOERROR", 3="NXDOMAIN", etc.) |
+| NetworkProtocol | string | dns.TCP | "TCP" if TCP=1, otherwise "UDP" |
+| DnsFlagsRecursionDesired | bool | dns.RD | True if RD=1 |
+| DnsFlagsCheckingDisabled | bool | dns.CD | True if CD=1 |
+| DnsFlags | string | Derived | Combination of flags (RD, CD, AA, AD) |
+| DnsZone | string | dns.Zone | Direct mapping if available |
 
 ### ETW Event Sample
 
-Current ETW event capture format from our collector:
+Current ETW event capture format from our collector for a DNS Server query event:
 
 ```json
 {
   "scopeLogs": [
     {
       "scope": {
-        "name": "dns.client.events"
+        "name": "asim.dns.events"
       },
       "logRecords": [
         {
           "timeUnixNano": "1740474551984079100",
           "body": {
-            "stringValue": "DNS Event: 3006"
+            "stringValue": "DNS Server Event: Query request (ID: 256)"
           },
           "attributes": [
             {
-              "key": "provider.name",
+              "key": "EventType",
               "value": {
-                "stringValue": "Microsoft-Windows-DNS-Client"
+                "stringValue": "Query"
               }
             },
             {
-              "key": "provider.guid",
+              "key": "EventSubType",
               "value": {
-                "stringValue": "{1C95126E-7EEA-49A9-A3FE-A378B03DDB4D}"
+                "stringValue": "request"
               }
             },
             {
-              "key": "event.id",
+              "key": "EventProduct",
               "value": {
-                "intValue": "3006"
+                "stringValue": "DNS Server"
               }
             },
             {
-              "key": "process.pid",
+              "key": "EventVendor",
               "value": {
-                "intValue": "5988"
+                "stringValue": "Microsoft"
               }
             },
             {
-              "key": "thread.id",
+              "key": "EventOriginalType",
               "value": {
-                "intValue": "5060"
+                "stringValue": "256"
               }
             },
             {
-              "key": "dns.QueryType",
+              "key": "EventCount",
               "value": {
-                "stringValue": "28"
+                "intValue": "1"
               }
             },
             {
-              "key": "dns.QueryOptions",
+              "key": "SrcIpAddr",
               "value": {
-                "stringValue": "213000"
+                "stringValue": "10.0.0.15"
               }
             },
             {
-              "key": "dns.ServerList",
+              "key": "SrcPortNumber",
               "value": {
-                "stringValue": "127.0.0.1;"
+                "intValue": "50432"
               }
             },
             {
-              "key": "dns.IsNetworkQuery",
+              "key": "DstPortNumber",
               "value": {
-                "stringValue": "0"
+                "intValue": "53"
               }
             },
             {
-              "key": "dns.NetworkQueryIndex",
+              "key": "NetworkProtocol",
               "value": {
-                "stringValue": "0"
+                "stringValue": "UDP"
               }
             },
             {
-              "key": "dns.InterfaceIndex",
+              "key": "DnsQuery",
               "value": {
-                "stringValue": "0"
+                "stringValue": "www.example.com"
               }
             },
             {
-              "key": "dns.IsAsyncQuery",
+              "key": "DnsQueryType",
               "value": {
-                "stringValue": "0"
+                "intValue": "1"
               }
             },
             {
-              "key": "dns.QueryName",
+              "key": "DnsQueryTypeName",
               "value": {
-                "stringValue": "www.github.com"
+                "stringValue": "A"
+              }
+            },
+            {
+              "key": "DnsFlagsRecursionDesired",
+              "value": {
+                "boolValue": true
+              }
+            },
+            {
+              "key": "DnsFlagsCheckingDisabled",
+              "value": {
+                "boolValue": false
+              }
+            },
+            {
+              "key": "DnsFlags",
+              "value": {
+                "stringValue": "RD"
               }
             }
           ]
@@ -305,114 +330,110 @@ Expected ASIM DNS Activity Logs format:
 
 ```csv
 "TimeGenerated [UTC]",EventCount,EventType,EventSubType,EventResult,EventResultDetails,EventOriginalType,EventProduct,EventVendor,DvcIpAddr,DvcHostname,DvcDomainType,DvcOs,DvcOsVersion,AdditionalFields,SrcIpAddr,SrcPortNumber,DstIpAddr,DnsQuery,DnsQueryType
-"2/25/2025, 9:19:25.391 AM",1,Query,request,NA,NA,256,"DNS Server",Microsoft,"10.5.0.7",DNS,FQDN,Windows,"10.0.14393.0","{}","10.5.0.7",63874,"10.5.0.7","www.microsoft.com",1
+"2/25/2025, 9:19:25.391 AM",1,Query,request,NA,NA,256,"DNS Server",Microsoft,"10.5.0.7",DNS,FQDN,Windows,"10.0.14393.0","{}","10.0.0.15",50432,"10.5.0.7","www.example.com",1
 ```
 
 ## Implementation Strategy
 
-The transformation from ETW events to ASIM schema should be implemented in the `convertEventToLogs` function within the `asimdns_windows.go` file. The implementation should:
+The transformation from ETW events to ASIM schema is implemented in the `handleDnsServerEvent` function within the `dns_server_helpers.go` file. The implementation:
 
-1. Determine the event type based on the ETW event ID
-2. Extract relevant fields from the ETW event
-3. Map ETW fields to ASIM schema fields
-4. Set default values for required fields when source data is unavailable
-5. Format the output according to ASIM schema requirements
+1. Determines the event type based on the ETW event ID
+2. Extracts relevant fields from the ETW event
+3. Maps ETW fields to ASIM schema fields
+4. Sets default values for required fields when source data is unavailable
+5. Formats the output according to ASIM schema requirements
 
 ### Pseudo Code
 
 ```go
-func convertEventToLogs(event *etw.Event) plog.Logs {
-    logs := plog.NewLogs()
-    resourceLogs := logs.ResourceLogs().AppendEmpty()
+func handleDnsServerEvent(event *etw.Event, logRecord plog.LogRecord) {
+    // Set proper timestamps
+    eventTime := event.System.TimeCreated.SystemTime
+    logRecord.SetTimestamp(pcommon.NewTimestampFromTime(eventTime))
+    logRecord.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Now()))
     
-    // Set resource attributes
-    resourceLogs.Resource().Attributes().PutStr("service.name", "windows_dns_client")
+    // Set DNS Server specific resource attributes
+    logRecord.Attributes().PutStr("EventProduct", "DNS Server")
+    logRecord.Attributes().PutStr("EventVendor", "Microsoft")
+    logRecord.Attributes().PutStr("EventOriginalType", strconv.Itoa(int(event.System.EventID)))
     
-    // Create scope logs
-    scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
-    scopeLogs.Scope().SetName("dns.client.events")
+    // Set common ASIM fields
+    logRecord.Attributes().PutInt("EventCount", 1)
     
-    // Create log record
-    logRecord := scopeLogs.LogRecords().AppendEmpty()
+    // Determine event type and subtype based on DNS Server event ID
+    eventType, eventSubType := getAsimDnsServerEventType(event.System.EventID)
+    logRecord.Attributes().PutStr("EventType", eventType)
+    logRecord.Attributes().PutStr("EventSubType", eventSubType)
     
-    // Set timestamp
-    logRecord.SetTimestamp(pcommon.NewTimestampFromTime(event.System.TimeCreated.SystemTime))
+    // Set standard query information if available
+    if queryName, ok := getEventDataString(event, "QNAME"); ok {
+        logRecord.Attributes().PutStr("DnsQuery", queryName)
+    }
     
-    // Extract event ID
-    eventID := event.System.EventID
-    
-    // Determine ASIM event type and subtype
-    eventType := "Query"
-    eventSubType := "request"
-    if eventID == 3008 {
-        eventSubType = "response"
-    } else if eventID == 3020 || eventID == 3019 {
-        eventType = "DnsCache"
-        if eventID == 3020 {
-            eventSubType = "add"
-        } else {
-            eventSubType = "remove"
+    // Handle DNS Server specific fields
+    if queryType, ok := getEventDataString(event, "QTYPE"); ok {
+        if queryTypeInt, err := strconv.Atoi(queryType); err == nil {
+            logRecord.Attributes().PutInt("DnsQueryType", int64(queryTypeInt))
+            logRecord.Attributes().PutStr("DnsQueryTypeName", getDnsQueryTypeName(queryTypeInt))
         }
     }
     
-    // Set ASIM fields
-    logRecord.Attributes().PutStr("EventType", eventType)
-    logRecord.Attributes().PutStr("EventSubType", eventSubType)
-    logRecord.Attributes().PutInt("EventCount", 1)
-    logRecord.Attributes().PutStr("EventOriginalType", fmt.Sprintf("%d", eventID))
-    logRecord.Attributes().PutStr("EventProduct", "DNS Client")
-    logRecord.Attributes().PutStr("EventVendor", "Microsoft")
-    
-    // Extract DNS-specific fields
-    if queryName, ok := event.EventData["QueryName"]; ok {
-        logRecord.Attributes().PutStr("DnsQuery", queryName.(string))
+    // Extract client IP
+    if srcIP, ok := getEventDataString(event, "CLIENT_IP"); ok {
+        logRecord.Attributes().PutStr("SrcIpAddr", srcIP)
     }
     
-    if queryType, ok := event.EventData["QueryType"]; ok {
-        queryTypeInt, _ := strconv.Atoi(queryType.(string))
-        logRecord.Attributes().PutInt("DnsQueryType", int64(queryTypeInt))
-        
-        // Map query type to name
-        queryTypeName := mapQueryTypeName(queryTypeInt)
-        logRecord.Attributes().PutStr("DnsQueryTypeName", queryTypeName)
+    // Extract client port
+    if port, ok := getEventDataString(event, "Port"); ok {
+        if portInt, err := strconv.Atoi(port); err == nil {
+            logRecord.Attributes().PutInt("SrcPortNumber", int64(portInt))
+        }
     }
     
-    // Extract and map additional fields as needed
+    // Set destination port - always 53 for DNS
+    logRecord.Attributes().PutInt("DstPortNumber", 53)
     
-    return logs
+    // Process DNS flags
+    if rd, ok := getEventDataString(event, "RD"); ok && rd == "1" {
+        logRecord.Attributes().PutBool("DnsFlagsRecursionDesired", true)
+    }
+    
+    // Process response code for response events
+    if eventSubType == "response" {
+        if rcode, ok := getEventDataString(event, "RCODE"); ok {
+            if rcodeInt, err := strconv.Atoi(rcode); err == nil {
+                logRecord.Attributes().PutInt("DnsResponseCode", int64(rcodeInt))
+                logRecord.Attributes().PutStr("DnsResponseName", getDnsResponseName(rcodeInt))
+                
+                // Set EventResult based on response code
+                if rcodeInt == 0 {
+                    logRecord.Attributes().PutStr("EventResult", "Success")
+                } else {
+                    logRecord.Attributes().PutStr("EventResult", "Failure")
+                }
+            }
+        }
+    }
 }
 
-func mapQueryTypeName(queryType int) string {
-    switch queryType {
-    case 1:
-        return "A"
-    case 2:
-        return "NS"
-    case 5:
-        return "CNAME"
-    case 6:
-        return "SOA"
-    case 12:
-        return "PTR"
-    case 15:
-        return "MX"
-    case 16:
-        return "TXT"
-    case 28:
-        return "AAAA"
-    case 33:
-        return "SRV"
-    case 65:
-        return "HTTPS"
+// Maps DNS Server event IDs to ASIM event types
+func getAsimDnsServerEventType(eventID uint16) (string, string) {
+    switch eventID {
+    case 256, 257:
+        return "Query", "request"
+    case 258, 259:
+        return "Query", "response"
+    case 260, 261:
+        return "Query", "recursive"
     default:
-        return fmt.Sprintf("TYPE%d", queryType)
+        return "Info", "status"
     }
 }
 ```
 
 ## DNS Query Type Mapping
 
-DNS Query Types should be mapped to their corresponding names:
+DNS Query Types are mapped to their corresponding names:
 
 | QueryType | QueryTypeName |
 |-----------|---------------|
@@ -429,7 +450,7 @@ DNS Query Types should be mapped to their corresponding names:
 
 ## DNS Response Code Mapping
 
-DNS Response Codes should be mapped to their corresponding names:
+DNS Response Codes are mapped to their corresponding names:
 
 | ResponseCode | ResponseName |
 |--------------|--------------|
@@ -457,14 +478,13 @@ To ensure correct transformation:
 
 ## Next Steps
 
-1. Implement the transformation logic in `asimdns_windows.go`
-2. Add comprehensive field mapping for all relevant ASIM fields
-3. Develop unit tests for the transformation
-4. Add validation to ensure ASIM compatibility
-5. Document any limitations or assumptions in the mapping
+1. Implement any missing field mappings for ASIM compatibility
+2. Develop unit tests for the transformation
+3. Add validation to ensure ASIM compatibility
+4. Document any limitations or assumptions in the mapping
 
 ## References
 
 - [Microsoft Sentinel ASIM DNS Normalization Schema](https://learn.microsoft.com/en-us/azure/sentinel/normalization-schema-dns)
-- [Windows DNS Client ETW Provider](https://docs.microsoft.com/en-us/windows/win32/wec/windows-event-channels-for-services-and-drivers)
+- [Windows DNS Server ETW Provider GUID](https://learn.microsoft.com/en-us/windows/win32/etw/microsoft-windows-dnsserver)
 - [DNS Protocol RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035)

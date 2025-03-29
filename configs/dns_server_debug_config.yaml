@@ -1,8 +1,8 @@
-# OpenTelemetry Collector configuration for Windows DNS Server Monitoring
+# OpenTelemetry Collector configuration for Windows DNS Server Monitoring (Debug Mode)
 receivers:
   asimdns:
     # ETW session name
-    session_name: "DNSServerTrace"
+    session_name: "DNSServerDebugTrace"
     # DNS Server Provider Configuration - Microsoft-Windows-DNSServer
     provider_guid: "{EB79061A-A566-4698-9119-3ED2807060E7}"
     # Enable relevant keywords for DNS Server queries
@@ -14,27 +14,25 @@ receivers:
     # 0x0000000000000020: RECURSE_RESPONSE_IN
     enable_flags: 0x000000000000003F  # Combined flags for query-related events
     # Information level (4 is Informational, 5 is Verbose)
-    enable_level: 4
+    enable_level: 5  # Increased to Verbose for debugging
     
     # -- Filtering Configuration --
+    # Note: This configuration has minimal filtering for debugging
     
     # Event type filtering
-    include_info_events: true   # Include "Info" event types for DNS Server
-    excluded_event_ids: []      # No excluded event IDs by default
+    include_info_events: true   # Include all event types for debugging
+    excluded_event_ids: []      # No excluded event IDs for debugging
     
-    # Domain filtering - exclude common operational queries
+    # Domain filtering - only exclude a few test domains
     excluded_domains:
-      - "*.opinsights.azure.com"         # Azure monitoring
-      - "*.guestconfiguration.azure.com" # Azure guest config
-      - "*.internal.cloudapp.net"        # Azure internal
-      - "wpad.*"                         # Web proxy auto-discovery
+      - "example.com"           # Test domain
     
     # Query deduplication
-    enable_deduplication: true          # Enable deduplication of repeated queries
-    deduplication_window: 300           # Time window in seconds (5 minutes)
+    enable_deduplication: false # Disable deduplication for debugging
+    deduplication_window: 300   # 5 minutes (not used when disabled)
     
     # Query type filtering
-    exclude_aaaa_records: false         # Keep IPv6 AAAA record queries for DNS Server
+    exclude_aaaa_records: false # Include AAAA records for debugging
     
 processors:
   batch:
@@ -55,10 +53,10 @@ processors:
         value: "windows-monitoring"
         action: upsert
       - key: environment
-        value: "production"
+        value: "debug"
         action: upsert
       - key: collector.name
-        value: "dns-event-collector"
+        value: "dns-event-collector-debug"
         action: upsert
 
   attributes:
@@ -71,6 +69,9 @@ processors:
         action: upsert
       - key: collection_mode
         value: "etw_realtime"
+        action: upsert
+      - key: debug_mode
+        value: "true"
         action: upsert
 
 exporters:
@@ -117,6 +118,6 @@ service:
 
   telemetry:
     logs:
-      level: "debug"
+      level: "debug"  # Set to debug for maximum logging
       development: true
       encoding: "console"
